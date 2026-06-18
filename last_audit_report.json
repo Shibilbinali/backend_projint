@@ -1,0 +1,33 @@
+{
+  "timestamp": "2026-06-18T11:04:05.636Z",
+  "stats": {
+    "totalBooks": 30,
+    "totalUpdated": 0,
+    "updatedPricesCount": 0,
+    "updatedTaxesCount": 0,
+    "missingInfoCount": 0,
+    "healthScore": 93
+  },
+  "updatedPrices": [],
+  "updatedTaxes": [],
+  "missingInfo": [],
+  "missingDataWarnings": [],
+  "duplicateWarnings": [
+    {
+      "id": 54,
+      "title": "The Very Hungry Caterpillar",
+      "author": " Eric Carle",
+      "isbn": ": 9780399226908"
+    },
+    {
+      "id": 17,
+      "title": "The Very Hungry Caterpillar",
+      "author": "Eric Carle",
+      "isbn": "9780399226908"
+    }
+  ],
+  "incorrectCategoryWarnings": [],
+  "missingIsbnWarnings": [],
+  "missingCoverImageWarnings": [],
+  "inventoryInconsistencies": []
+}

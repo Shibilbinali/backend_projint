@@ -1,0 +1,38 @@
+{
+  "timestamp": "2026-06-18T17:21:13.971Z",
+  "totalChecked": 31,
+  "moved": [],
+  "needsReview": [],
+  "conflicts": [
+    {
+      "id": 17,
+      "title": "The Very Hungry Caterpillar",
+      "author": "Eric Carle",
+      "isbn": "9780399226908",
+      "previousCategory": "Children's Picture Books",
+      "newCategory": "Children's Picture Books",
+      "secondaryCategories": [],
+      "confidence": 1,
+      "notes": "Matched explicit override rule for \"Children's Picture Books\".",
+      "conflictType": "Duplicate book record found (duplicate ISBN or Title/Author pair)"
+    },
+    {
+      "id": 54,
+      "title": "The Very Hungry Caterpillar",
+      "author": " Eric Carle",
+      "isbn": ": 9780399226908",
+      "previousCategory": "Children's Picture Books",
+      "newCategory": "Children's Picture Books",
+      "secondaryCategories": [],
+      "confidence": 1,
+      "notes": "Matched explicit override rule for \"Children's Picture Books\".",
+      "conflictType": "Duplicate book record found (duplicate ISBN or Title/Author pair)"
+    }
+  ],
+  "stats": {
+    "totalChecked": 31,
+    "movedCount": 0,
+    "reviewCount": 0,
+    "conflictCount": 2
+  }
+}
