@@ -1,5 +1,17 @@
 const fs = require('fs');
 const path = require('path');
+
+// Diagnostic logging before loading config
+console.log('🔍 Environment Diagnostics:');
+console.log(`- NODE_ENV: ${process.env.NODE_ENV}`);
+if (process.env.DATABASE_URL) {
+  // Mask connection string password for safety
+  const maskedUrl = process.env.DATABASE_URL.replace(/:([^:@]+)@/, ':****@');
+  console.log(`- DATABASE_URL: Detected (${maskedUrl})`);
+} else {
+  console.log('- DATABASE_URL: ❌ NOT DETECTED (undefined)');
+}
+
 const pool = require('../src/config/db');
 
 async function runSetup() {
