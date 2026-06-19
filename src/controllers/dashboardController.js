@@ -6,8 +6,18 @@ const getDashboardStats = async (req, res, next) => {
     const now = new Date();
     const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
+    // Helper to run query safely with a fallback if it fails
+    const runQuerySafely = async (queryText, queryParams, fallbackRows) => {
+      try {
+        return await pool.query(queryText, queryParams);
+      } catch (err) {
+        console.error('⚠️ Dashboard query failed:', err.message);
+        return { rows: fallbackRows };
+      }
+    };
+
     const [salesStats, bookStats, dailyRevenue, lowStockBooks, topCategories] = await Promise.all([
-      pool.query(`
+      runQuerySafely(`
         SELECT
           COUNT(*) as total_sales,
           COALESCE(SUM(total_amount), 0) as total_revenue,
@@ -15,18 +25,18 @@ const getDashboardStats = async (req, res, next) => {
           COUNT(CASE WHEN created_at::date = $1 THEN 1 END) as today_sales,
           COUNT(CASE WHEN invoice_date = $2 THEN 1 END) as today_invoice_count
         FROM sales WHERE status = 'completed'
-      `, [today, localDate]),
+      `, [today, localDate], [{ total_sales: 0, total_revenue: 0, today_revenue: 0, today_sales: 0, today_invoice_count: 0 }]),
 
-      pool.query(`
+      runQuerySafely(`
         SELECT
           COUNT(*) as total_books,
           COALESCE(SUM(stock_qty), 0) as total_stock,
           COUNT(CASE WHEN stock_qty <= low_stock_threshold AND stock_qty > 0 THEN 1 END) as low_stock_count,
           COUNT(CASE WHEN stock_qty = 0 THEN 1 END) as out_of_stock_count
         FROM books WHERE is_active = true
-      `),
+      `, [], [{ total_books: 0, total_stock: 0, low_stock_count: 0, out_of_stock_count: 0 }]),
 
-      pool.query(`
+      runQuerySafely(`
         SELECT
           DATE(created_at) as date,
           COALESCE(SUM(total_amount), 0) as revenue,
@@ -35,17 +45,17 @@ const getDashboardStats = async (req, res, next) => {
         WHERE created_at >= NOW() - INTERVAL '30 days' AND status = 'completed'
         GROUP BY DATE(created_at)
         ORDER BY date
-      `),
+      `, [], []),
 
-      pool.query(`
+      runQuerySafely(`
         SELECT id, title, author, stock_qty, low_stock_threshold, price
         FROM books
         WHERE is_active = true AND stock_qty <= low_stock_threshold
         ORDER BY stock_qty ASC
         LIMIT 5
-      `),
+      `, [], []),
 
-      pool.query(`
+      runQuerySafely(`
         SELECT c.name, c.color, COALESCE(SUM(si.subtotal), 0) as revenue, COUNT(si.id) as items_sold
         FROM categories c
         LEFT JOIN books b ON c.id = b.category_id
@@ -54,7 +64,7 @@ const getDashboardStats = async (req, res, next) => {
         GROUP BY c.id, c.name, c.color
         ORDER BY revenue DESC
         LIMIT 6
-      `)
+      `, [], [])
     ]);
 
     res.json({

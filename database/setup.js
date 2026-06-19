@@ -36,15 +36,29 @@ async function runSetup() {
     await pool.query(seedSql);
     console.log('✅ Initial data seeded successfully.');
 
-    // 3. Update admin user to have email admin@bookstore.com
-    console.log('👑 Aligning admin email to admin@bookstore.com...');
+    // 3. Ensure default admin user exists and has correct credentials
+    console.log('👑 Checking default admin account...');
     const bcrypt = require('bcryptjs');
     const hash = bcrypt.hashSync('password123', 10);
-    await pool.query(
-      'UPDATE users SET email = $1, password_hash = $2 WHERE username = $3',
-      ['admin@bookstore.com', hash, 'admin']
+    const adminCheck = await pool.query(
+      "SELECT * FROM users WHERE role = 'admin' OR username = 'admin' OR email = 'admin@bookstore.com' LIMIT 1"
     );
-    console.log('✅ Admin credentials aligned successfully.');
+
+    if (adminCheck.rows.length === 0) {
+      console.log('👑 Default admin account not found. Creating it...');
+      await pool.query(
+        "INSERT INTO users (username, email, password_hash, role, is_active) VALUES ('admin', 'admin@bookstore.com', $1, 'admin', true)",
+        [hash]
+      );
+      console.log('✅ Default admin account created successfully.');
+    } else {
+      console.log('👑 Admin account already exists. Updating credentials for consistency...');
+      await pool.query(
+        "UPDATE users SET username = 'admin', email = $1, password_hash = $2, is_active = true WHERE id = $3",
+        ['admin@bookstore.com', hash, adminCheck.rows[0].id]
+      );
+      console.log('✅ Admin credentials updated successfully.');
+    }
 
     console.log('🎉 Database setup completed successfully!');
   } catch (error) {

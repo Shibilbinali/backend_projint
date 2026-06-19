@@ -3,6 +3,7 @@
 -- ============================================================
 
 -- Drop tables if exist (for clean reinstall)
+DROP TABLE IF EXISTS book_secondary_categories CASCADE;
 DROP TABLE IF EXISTS sale_items CASCADE;
 DROP TABLE IF EXISTS sales CASCADE;
 DROP TABLE IF EXISTS customers CASCADE;
@@ -58,8 +59,25 @@ CREATE TABLE books (
     published_year INTEGER,
     description TEXT,
     is_active BOOLEAN DEFAULT TRUE,
+    reading_age VARCHAR(50) DEFAULT 'All Ages',
+    price_type VARCHAR(20) DEFAULT 'Premium' CHECK (price_type IN ('Free', 'Premium')),
+    tags VARCHAR(500),
+    page_count INTEGER DEFAULT 0,
+    format VARCHAR(50) DEFAULT 'Printed' CHECK (format IN ('Printed', 'Digital')),
+    needs_manual_review BOOLEAN DEFAULT FALSE,
+    categorization_confidence DECIMAL(3, 2) DEFAULT 1.00,
+    categorization_notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================
+-- BOOK SECONDARY CATEGORIES
+-- ============================================================
+CREATE TABLE book_secondary_categories (
+    book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
+    category_id INTEGER REFERENCES categories(id) ON DELETE CASCADE,
+    PRIMARY KEY (book_id, category_id)
 );
 
 -- ============================================================
