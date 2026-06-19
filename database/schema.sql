@@ -92,6 +92,9 @@ CREATE TABLE sales (
     status VARCHAR(20) DEFAULT 'completed' CHECK (status IN ('completed', 'refunded', 'pending')),
     notes TEXT,
     is_round_off BOOLEAN DEFAULT FALSE,
+    invoice_number VARCHAR(100),
+    invoice_date DATE,
+    invoice_time TIME,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -107,6 +110,9 @@ CREATE TABLE sale_items (
     quantity INTEGER NOT NULL DEFAULT 1,
     unit_price DECIMAL(10, 2) NOT NULL,
     subtotal DECIMAL(10, 2) NOT NULL,
+    discount_applied DECIMAL(10, 2) DEFAULT 0,
+    tax_amount DECIMAL(10, 2) DEFAULT 0,
+    final_price DECIMAL(10, 2) DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

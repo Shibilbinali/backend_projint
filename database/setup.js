@@ -36,6 +36,16 @@ async function runSetup() {
     await pool.query(seedSql);
     console.log('✅ Initial data seeded successfully.');
 
+    // 3. Update admin user to have email admin@bookstore.com
+    console.log('👑 Aligning admin email to admin@bookstore.com...');
+    const bcrypt = require('bcryptjs');
+    const hash = bcrypt.hashSync('password123', 10);
+    await pool.query(
+      'UPDATE users SET email = $1, password_hash = $2 WHERE username = $3',
+      ['admin@bookstore.com', hash, 'admin']
+    );
+    console.log('✅ Admin credentials aligned successfully.');
+
     console.log('🎉 Database setup completed successfully!');
   } catch (error) {
     console.error('❌ Database setup failed:');
