@@ -902,7 +902,7 @@ const getAuditReport = async (req, res, next) => {
 const REQUIRED_BOOK_COLUMNS = [
   'title', 'author', 'isbn', 'category', 'selling_price', 'cost_price',
   'stock_quantity', 'low_stock_alert', 'publisher', 'published_year',
-  'edition', 'gst_percentage', 'cover_source', 'price_type', 'format',
+  'edition', 'gst_rate', 'cover_source', 'price_type', 'format',
   'page_count', 'reading_age', 'category_tags', 'description',
   'front_cover_url', 'back_cover_url', 'cover_image_url'
 ];
@@ -921,7 +921,7 @@ function normaliseBookRow(raw, idx) {
     publisher: String(raw.publisher || raw['Publisher'] || '').trim(),
     published_year: raw.published_year || raw['Published Year'] ? parseInt(raw.published_year || raw['Published Year'], 10) : null,
     edition: String(raw.edition || raw['Edition'] || '').trim(),
-    gst_percentage: parseFloat(raw.gst_percentage || raw['gst_percentage'] || raw['GST Percentage'] || raw['GST %'] || '0'),
+    gst_percentage: parseFloat(raw.gst_rate || raw['gst_rate'] || raw['GST Rate'] || raw.gst_percentage || raw['GST Percentage'] || raw['GST %'] || '0'),
     cover_source: String(raw.cover_source || raw['Cover Source'] || 'None').trim(),
     price_type: String(raw.price_type || raw['Price Type'] || 'Premium').trim(),
     format: String(raw.format || raw['Format'] || 'Printed').trim(),

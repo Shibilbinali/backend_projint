@@ -58,7 +58,7 @@ router.get('/audit-report', authenticate, getAuditReport); // Cashier can read
 router.get('/import-template', authenticate, requireAdmin, downloadImportTemplate);
 router.get('/import-history', authenticate, requireAdmin, getImportHistory);
 router.get('/import-history/:id', authenticate, requireAdmin, getImportSessionStatus);
-router.post('/import', authenticate, requireAdmin, bookUpload.single('file'), importBooks);
+router.post('/bulk-import', authenticate, requireAdmin, bookUpload.single('file'), importBooks);
 
 router.get('/:id', authenticate, getBookById);
 router.post('/:id/refresh', authenticate, requireAdmin, refreshMetadataEndpoint);
