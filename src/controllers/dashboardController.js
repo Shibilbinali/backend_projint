@@ -67,11 +67,13 @@ const getDashboardStats = async (req, res, next) => {
       `, [], [])
     ]);
 
+    const statsObj = {
+      ...salesStats.rows[0],
+      ...bookStats.rows[0],
+    };
+    console.log(`[Dashboard Stats API] Fetched stats: total_books = ${statsObj.total_books}, total_stock = ${statsObj.total_stock}, low_stock_count = ${statsObj.low_stock_count}, out_of_stock_count = ${statsObj.out_of_stock_count}`);
     res.json({
-      stats: {
-        ...salesStats.rows[0],
-        ...bookStats.rows[0],
-      },
+      stats: statsObj,
       daily_revenue: dailyRevenue.rows,
       low_stock_books: lowStockBooks.rows,
       top_categories: topCategories.rows,

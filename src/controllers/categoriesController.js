@@ -49,7 +49,11 @@ const updateCategory = async (req, res, next) => {
 
 const deleteCategory = async (req, res, next) => {
   try {
-    await pool.query('DELETE FROM categories WHERE id = $1', [req.params.id]);
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ message: 'Invalid ID format.' });
+    }
+    await pool.query('DELETE FROM categories WHERE id = $1', [id]);
     res.json({ message: 'Category deleted successfully.' });
   } catch (error) {
     next(error);

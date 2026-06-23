@@ -1,32 +1,62 @@
 {
-  "timestamp": "2026-06-18T11:04:05.636Z",
+  "timestamp": "2026-06-23T04:09:12.259Z",
   "stats": {
-    "totalBooks": 30,
+    "totalBooks": 20,
     "totalUpdated": 0,
     "updatedPricesCount": 0,
     "updatedTaxesCount": 0,
     "missingInfoCount": 0,
-    "healthScore": 93
+    "healthScore": 65
   },
   "updatedPrices": [],
   "updatedTaxes": [],
   "missingInfo": [],
   "missingDataWarnings": [],
-  "duplicateWarnings": [
+  "duplicateWarnings": [],
+  "incorrectCategoryWarnings": [
     {
-      "id": 54,
-      "title": "The Very Hungry Caterpillar",
-      "author": " Eric Carle",
-      "isbn": ": 9780399226908"
+      "id": 33,
+      "title": "National Geographic Kids Animal Encyclopedia",
+      "author": "National Geographic Kids",
+      "confidence": "0.60"
     },
     {
-      "id": 17,
-      "title": "The Very Hungry Caterpillar",
-      "author": "Eric Carle",
-      "isbn": "9780399226908"
+      "id": 36,
+      "title": " Introduction to Algorithms",
+      "author": " Thomas H. Cormen",
+      "confidence": "0.20"
+    },
+    {
+      "id": 65,
+      "title": "Atomic Habits",
+      "author": "James Clear",
+      "confidence": "0.20"
+    },
+    {
+      "id": 66,
+      "title": "The Alchemist",
+      "author": "Paulo Coelho",
+      "confidence": "0.20"
+    },
+    {
+      "id": 67,
+      "title": "Rich Dad Poor Dad",
+      "author": "Robert Kiyosaki",
+      "confidence": "0.20"
+    },
+    {
+      "id": 68,
+      "title": "Deep Work",
+      "author": "Cal Newport",
+      "confidence": "0.20"
+    },
+    {
+      "id": 69,
+      "title": "Ikigai",
+      "author": "Hector Garcia",
+      "confidence": "0.20"
     }
   ],
-  "incorrectCategoryWarnings": [],
   "missingIsbnWarnings": [],
   "missingCoverImageWarnings": [],
   "inventoryInconsistencies": []

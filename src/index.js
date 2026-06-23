@@ -14,6 +14,8 @@ const salesRoutes = require('./routes/sales');
 const dashboardRoutes = require('./routes/dashboard');
 const usersRoutes = require('./routes/users');
 
+const settingsRoutes = require('./routes/settings');
+
 const app = express();
 
 // Middleware
@@ -34,13 +36,14 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      console.warn(`⚠️ CORS blocked request from origin: ${origin}`);
+      callback(null, false);
     }
   },
   credentials: true,
   optionsSuccessStatus: 200,
 }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 const path = require('path');
@@ -60,6 +63,8 @@ app.use('/api/customers', customersRoutes);
 app.use('/api/sales', salesRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/users', usersRoutes);
+
+app.use('/api/settings', settingsRoutes);
 
 // 404 handler
 app.use((req, res) => {

@@ -3,6 +3,88 @@ const { fetchBookMetadata } = require('../services/metadataService');
 const { classifyBook } = require('../services/categoryService');
 const path = require('path');
 const fs = require('fs');
+const XLSX = require('xlsx');
+const { parse: parseCsv } = require('csv-parse/sync');
+const https = require('https');
+const http = require('http');
+const { URL } = require('url');
+
+async function downloadCoverImage(imgUrl, isbn) {
+  if (!imgUrl || typeof imgUrl !== 'string' || !imgUrl.startsWith('http')) {
+    throw new Error('Invalid URL');
+  }
+
+  const uploadsDir = path.join(__dirname, '../../uploads/books');
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+
+  // Determine file extension
+  let ext = 'jpg';
+  try {
+    const parsedUrl = new URL(imgUrl);
+    const pathname = parsedUrl.pathname;
+    const matchedExt = pathname.match(/\.(jpg|jpeg|png|gif|webp|bmp)(?:\?.*)?$/i);
+    if (matchedExt) {
+      ext = matchedExt[1].toLowerCase();
+    }
+  } catch (e) {
+    // Ignore error
+  }
+
+  const filename = `${isbn || 'cover'}_${Date.now()}_${Math.floor(Math.random() * 10000)}.${ext}`;
+  const destPath = path.join(uploadsDir, filename);
+
+  const fetchWithRedirects = (currentUrl, redirectCount = 0) => {
+    return new Promise((resolve, reject) => {
+      if (redirectCount > 5) {
+        return reject(new Error('Too many redirects'));
+      }
+
+      let client;
+      try {
+        client = currentUrl.startsWith('https') ? https : http;
+      } catch (err) {
+        return reject(err);
+      }
+      
+      const req = client.get(currentUrl, { timeout: 10000 }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          const redirectUrl = new URL(res.headers.location, currentUrl).href;
+          return resolve(fetchWithRedirects(redirectUrl, redirectCount + 1));
+        }
+
+        if (res.statusCode !== 200) {
+          return reject(new Error(`HTTP Status ${res.statusCode}`));
+        }
+
+        const fileStream = fs.createWriteStream(destPath);
+        res.pipe(fileStream);
+
+        fileStream.on('finish', () => {
+          fileStream.close();
+          resolve(`/uploads/books/${filename}`);
+        });
+
+        fileStream.on('error', (err) => {
+          fs.unlink(destPath, () => {});
+          reject(err);
+        });
+      });
+
+      req.on('error', (err) => {
+        reject(err);
+      });
+
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timeout'));
+      });
+    });
+  };
+
+  return fetchWithRedirects(imgUrl);
+}
 
 const AUDIT_REPORT_PATH = path.join(__dirname, '../../last_audit_report.json');
 
@@ -813,6 +895,492 @@ const getAuditReport = async (req, res, next) => {
   }
 };
 
+// ============================================================
+// BULK BOOK IMPORT MODULE
+// ============================================================
+
+const REQUIRED_BOOK_COLUMNS = [
+  'title', 'author', 'isbn', 'category', 'selling_price', 'cost_price',
+  'stock_quantity', 'low_stock_alert', 'publisher', 'published_year',
+  'edition', 'gst_percentage', 'cover_source', 'price_type', 'format',
+  'page_count', 'reading_age', 'category_tags', 'description',
+  'front_cover_url', 'back_cover_url', 'cover_image_url'
+];
+
+function normaliseBookRow(raw, idx) {
+  return {
+    _row: idx + 2, // 1-indexed, header=1
+    title: String(raw.title || raw['Title'] || '').trim(),
+    author: String(raw.author || raw['Author'] || '').trim(),
+    isbn: String(raw.isbn || raw['ISBN'] || '').trim(),
+    category: String(raw.category || raw['Category'] || '').trim(),
+    selling_price: parseFloat(raw.selling_price || raw['selling_price'] || raw['Selling Price'] || '0'),
+    cost_price: parseFloat(raw.cost_price || raw['cost_price'] || raw['Cost Price'] || '0'),
+    stock_quantity: parseInt(raw.stock_quantity || raw['stock_quantity'] || raw['Stock Quantity'] || '0', 10),
+    low_stock_alert: parseInt(raw.low_stock_alert || raw['low_stock_alert'] || raw['Low Stock Alert'] || '5', 10),
+    publisher: String(raw.publisher || raw['Publisher'] || '').trim(),
+    published_year: raw.published_year || raw['Published Year'] ? parseInt(raw.published_year || raw['Published Year'], 10) : null,
+    edition: String(raw.edition || raw['Edition'] || '').trim(),
+    gst_percentage: parseFloat(raw.gst_percentage || raw['gst_percentage'] || raw['GST Percentage'] || raw['GST %'] || '0'),
+    cover_source: String(raw.cover_source || raw['Cover Source'] || 'None').trim(),
+    price_type: String(raw.price_type || raw['Price Type'] || 'Premium').trim(),
+    format: String(raw.format || raw['Format'] || 'Printed').trim(),
+    page_count: parseInt(raw.page_count || raw['Page Count'] || '0', 10),
+    reading_age: String(raw.reading_age || raw['Reading Age'] || 'All Ages').trim(),
+    category_tags: String(raw.category_tags || raw['Category Tags'] || raw['tags'] || '').trim(),
+    description: String(raw.description || raw['Description'] || '').trim(),
+    front_cover_url: String(raw.front_cover_url || raw['Front Cover URL'] || '').trim(),
+    back_cover_url: String(raw.back_cover_url || raw['Back Cover URL'] || '').trim(),
+    cover_image_url: String(raw.cover_image_url || raw['Cover Image URL'] || raw['cover_image_url'] || '').trim()
+  };
+}
+
+function validateBookRow(row) {
+  const errs = [];
+  if (!row.title) errs.push('Title is required');
+  if (!row.author) errs.push('Author is required');
+  if (!row.category) errs.push('Category is required');
+  if (isNaN(row.selling_price) || row.selling_price < 0) errs.push('Selling price must be a non-negative number');
+  if (isNaN(row.cost_price) || row.cost_price < 0) errs.push('Cost price must be a non-negative number');
+  if (isNaN(row.stock_quantity) || row.stock_quantity < 0) errs.push('Stock quantity must be a non-negative integer');
+  if (isNaN(row.low_stock_alert) || row.low_stock_alert < 0) errs.push('Low stock alert must be a non-negative integer');
+  if (row.price_type && !['Free', 'Premium'].includes(row.price_type)) errs.push('Price Type must be Free or Premium');
+  if (row.format && !['Printed', 'Digital'].includes(row.format)) errs.push('Format must be Printed or Digital');
+  if (row.published_year !== null && (isNaN(row.published_year) || row.published_year < 1000 || row.published_year > 2100)) {
+    errs.push('Published year must be a valid 4-digit year');
+  }
+  return errs;
+}
+
+const downloadImportTemplate = (req, res) => {
+  const format = req.query.format || 'csv';
+  if (format === 'xlsx') {
+    const wb = XLSX.utils.book_new();
+    const data = [
+      REQUIRED_BOOK_COLUMNS,
+      [
+        'The Great Gatsby', 'F. Scott Fitzgerald', '9780743273565', 'Classics', '299.00', '150.00',
+        '50', '5', 'Scribner', '1925', 'First', '5', 'None', 'Premium', 'Printed',
+        '180', 'All Ages', 'classic, fiction', 'A novel about wealth and love in the 1920s',
+        'http://example.com/gatsby_front.jpg', '', 'http://example.com/gatsby_cover.jpg'
+      ]
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    XLSX.utils.book_append_sheet(wb, ws, 'Books Template');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.set('Content-Disposition', 'attachment; filename="books_import_template.xlsx"');
+    return res.send(buf);
+  }
+
+  // CSV
+  const sample = [
+    REQUIRED_BOOK_COLUMNS.join(','),
+    'The Great Gatsby,F. Scott Fitzgerald,9780743273565,Classics,299.00,150.00,50,5,Scribner,1925,First,5,None,Premium,Printed,180,All Ages,"classic, fiction",A novel about wealth and love in the 1920s,http://example.com/gatsby_front.jpg,,http://example.com/gatsby_cover.jpg'
+  ].join('\n');
+
+  res.set('Content-Type', 'text/csv');
+  res.set('Content-Disposition', 'attachment; filename="books_import_template.csv"');
+  res.send(sample);
+};
+
+const getImportHistory = async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT bis.*, u.username as imported_by_name
+       FROM book_import_sessions bis
+       LEFT JOIN users u ON bis.imported_by = u.id
+       ORDER BY bis.created_at DESC`
+    );
+    res.json(result.rows);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const getImportSessionStatus = async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT bis.*, u.username as imported_by_name
+       FROM book_import_sessions bis
+       LEFT JOIN users u ON bis.imported_by = u.id
+       WHERE bis.id = $1`,
+      [req.params.id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Import session not found.' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    next(err);
+  }
+};
+
+async function runBackgroundBookImport(sessionId, rows, duplicateMode) {
+  const BATCH_SIZE = 500;
+  let successCount = 0;
+  let updatedCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+  let coversImportedCount = 0;
+  let failedCoversCount = 0;
+  const errors = [];
+
+  const categoryCache = new Map();
+
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const chunk = rows.slice(i, i + BATCH_SIZE);
+    const txClient = await pool.connect();
+    
+    try {
+      await txClient.query('BEGIN');
+      
+      for (const row of chunk) {
+        try {
+          const catNameClean = row.category.trim();
+          let catId = categoryCache.get(catNameClean.toLowerCase());
+          
+          if (!catId) {
+            const catRes = await txClient.query(
+              'SELECT id FROM categories WHERE LOWER(name) = LOWER($1)',
+              [catNameClean]
+            );
+            if (catRes.rows.length > 0) {
+              catId = catRes.rows[0].id;
+            } else {
+              const insertCatRes = await txClient.query(
+                `INSERT INTO categories (name, created_at)
+                 VALUES ($1, NOW()) RETURNING id`,
+                [catNameClean]
+              );
+              catId = insertCatRes.rows[0].id;
+            }
+            categoryCache.set(catNameClean.toLowerCase(), catId);
+          }
+
+          let existingBookId = null;
+          if (row.isbn) {
+            const existingRes = await txClient.query(
+              'SELECT id FROM books WHERE isbn = $1 AND is_active = true LIMIT 1',
+              [row.isbn]
+            );
+            if (existingRes.rows.length > 0) {
+              existingBookId = existingRes.rows[0].id;
+            }
+          }
+
+          // Handle cover image downloading
+          let localCoverPath = null;
+          const coverUrl = row.cover_image_url || row.front_cover_url;
+          if (coverUrl && coverUrl.trim().startsWith('http')) {
+            try {
+              localCoverPath = await downloadCoverImage(coverUrl.trim(), row.isbn);
+              coversImportedCount++;
+            } catch (dlErr) {
+              console.error(`Failed to download cover for ISBN ${row.isbn} from ${coverUrl}: ${dlErr.message}`);
+              failedCoversCount++;
+              localCoverPath = '/uploads/cover-not-available.svg';
+            }
+          }
+
+          if (existingBookId) {
+            if (duplicateMode === 'skip') {
+              skippedCount++;
+              continue;
+            } else if (duplicateMode === 'update') {
+              await txClient.query(
+                `UPDATE books SET
+                  title = $1, author = $2, category_id = $3, price = $4, cost_price = $5,
+                  stock_qty = $6, low_stock_threshold = $7, publisher = $8, published_year = $9,
+                  edition = $10, tax_rate = $11, cover_image_url = $12, front_cover_url = $12,
+                  back_cover_url = $13, cover_source = $14, reading_age = $15, price_type = $16,
+                  tags = $17, page_count = $18, format = $19, description = $20,
+                  cover_image = COALESCE($21, cover_image), updated_at = NOW()
+                 WHERE id = $22`,
+                [
+                  row.title, row.author, catId, row.selling_price, row.cost_price,
+                  row.stock_quantity, row.low_stock_alert, row.publisher, row.published_year,
+                  row.edition, row.gst_percentage, row.cover_image_url || row.front_cover_url || null, row.back_cover_url || null,
+                  row.cover_source, row.reading_age, row.price_type, row.category_tags,
+                  row.page_count, row.format, row.description, localCoverPath || null, existingBookId
+                ]
+              );
+              updatedCount++;
+              continue;
+            }
+          }
+
+          await txClient.query(
+            `INSERT INTO books (
+              title, author, isbn, category_id, price, cost_price, stock_qty,
+              low_stock_threshold, publisher, published_year, edition, tax_rate,
+              cover_image_url, front_cover_url, back_cover_url, cover_source,
+              reading_age, price_type, tags, page_count, format, description, cover_image
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+            [
+              row.title, row.author, row.isbn || null, catId, row.selling_price, row.cost_price,
+              row.stock_quantity, row.low_stock_alert, row.publisher, row.published_year,
+              row.edition, row.gst_percentage, row.cover_image_url || row.front_cover_url || null, row.front_cover_url || null, row.back_cover_url || null,
+              row.cover_source, row.reading_age, row.price_type, row.category_tags,
+              row.page_count, row.format, row.description, localCoverPath || '/uploads/cover-not-available.svg'
+            ]
+          );
+          successCount++;
+        } catch (rowErr) {
+          failedCount++;
+          errors.push({
+            row: row._row,
+            title: row.title,
+            isbn: row.isbn,
+            error: rowErr.message
+          });
+        }
+      }
+
+      await txClient.query('COMMIT');
+    } catch (batchErr) {
+      await txClient.query('ROLLBACK');
+      console.error(`Batch starting at index ${i} failed. Retrying rows one-by-one to salvage successful insertions...`);
+      
+      for (const row of chunk) {
+        const singleClient = await pool.connect();
+        try {
+          await singleClient.query('BEGIN');
+          
+          const catNameClean = row.category.trim();
+          let catId = categoryCache.get(catNameClean.toLowerCase());
+          
+          if (!catId) {
+            const catRes = await singleClient.query(
+              'SELECT id FROM categories WHERE LOWER(name) = LOWER($1)',
+              [catNameClean]
+            );
+            if (catRes.rows.length > 0) {
+              catId = catRes.rows[0].id;
+            } else {
+              const insertCatRes = await singleClient.query(
+                `INSERT INTO categories (name, created_at)
+                 VALUES ($1, NOW()) RETURNING id`,
+                [catNameClean]
+              );
+              catId = insertCatRes.rows[0].id;
+            }
+            categoryCache.set(catNameClean.toLowerCase(), catId);
+          }
+
+          let existingBookId = null;
+          if (row.isbn) {
+            const existingRes = await singleClient.query(
+              'SELECT id FROM books WHERE isbn = $1 AND is_active = true LIMIT 1',
+              [row.isbn]
+            );
+            if (existingRes.rows.length > 0) {
+              existingBookId = existingRes.rows[0].id;
+            }
+          }
+
+          // Handle cover image downloading
+          let localCoverPath = null;
+          const coverUrl = row.cover_image_url || row.front_cover_url;
+          if (coverUrl && coverUrl.trim().startsWith('http')) {
+            try {
+              localCoverPath = await downloadCoverImage(coverUrl.trim(), row.isbn);
+              coversImportedCount++;
+            } catch (dlErr) {
+              console.error(`Failed to download cover for ISBN ${row.isbn} from ${coverUrl}: ${dlErr.message}`);
+              failedCoversCount++;
+              localCoverPath = '/uploads/cover-not-available.svg';
+            }
+          }
+
+          if (existingBookId) {
+            if (duplicateMode === 'skip') {
+              skippedCount++;
+              await singleClient.query('COMMIT');
+              continue;
+            } else if (duplicateMode === 'update') {
+              await singleClient.query(
+                `UPDATE books SET
+                  title = $1, author = $2, category_id = $3, price = $4, cost_price = $5,
+                  stock_qty = $6, low_stock_threshold = $7, publisher = $8, published_year = $9,
+                  edition = $10, tax_rate = $11, cover_image_url = $12, front_cover_url = $12,
+                  back_cover_url = $13, cover_source = $14, reading_age = $15, price_type = $16,
+                  tags = $17, page_count = $18, format = $19, description = $20,
+                  cover_image = COALESCE($21, cover_image), updated_at = NOW()
+                 WHERE id = $22`,
+                [
+                  row.title, row.author, catId, row.selling_price, row.cost_price,
+                  row.stock_quantity, row.low_stock_alert, row.publisher, row.published_year,
+                  row.edition, row.gst_percentage, row.cover_image_url || row.front_cover_url || null, row.back_cover_url || null,
+                  row.cover_source, row.reading_age, row.price_type, row.category_tags,
+                  row.page_count, row.format, row.description, localCoverPath || null, existingBookId
+                ]
+              );
+              updatedCount++;
+              await singleClient.query('COMMIT');
+              continue;
+            }
+          }
+
+          await singleClient.query(
+            `INSERT INTO books (
+              title, author, isbn, category_id, price, cost_price, stock_qty,
+              low_stock_threshold, publisher, published_year, edition, tax_rate,
+              cover_image_url, front_cover_url, back_cover_url, cover_source,
+              reading_age, price_type, tags, page_count, format, description, cover_image
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
+            [
+              row.title, row.author, row.isbn || null, catId, row.selling_price, row.cost_price,
+              row.stock_quantity, row.low_stock_alert, row.publisher, row.published_year,
+              row.edition, row.gst_percentage, row.cover_image_url || row.front_cover_url || null, row.front_cover_url || null, row.back_cover_url || null,
+              row.cover_source, row.reading_age, row.price_type, row.category_tags,
+              row.page_count, row.format, row.description, localCoverPath || '/uploads/cover-not-available.svg'
+            ]
+          );
+          successCount++;
+          await singleClient.query('COMMIT');
+        } catch (singleRowErr) {
+          await singleClient.query('ROLLBACK');
+          failedCount++;
+          errors.push({
+            row: row._row,
+            title: row.title,
+            isbn: row.isbn,
+            error: singleRowErr.message
+          });
+        } finally {
+          singleClient.release();
+        }
+      }
+    } finally {
+      txClient.release();
+    }
+
+    await pool.query(
+      `UPDATE book_import_sessions SET
+        success_count = $1, updated_count = $2, skipped_count = $3, failed_count = $4,
+        covers_imported_count = $5, failed_covers_count = $6, errors = $7
+       WHERE id = $8`,
+      [successCount, updatedCount, skippedCount, failedCount, coversImportedCount, failedCoversCount, JSON.stringify(errors), sessionId]
+    );
+  }
+
+  await pool.query(
+    `UPDATE book_import_sessions SET
+      status = 'completed', completed_at = NOW(),
+      success_count = $1, updated_count = $2, skipped_count = $3, failed_count = $4,
+      covers_imported_count = $5, failed_covers_count = $6, errors = $7
+     WHERE id = $8`,
+    [successCount, updatedCount, skippedCount, failedCount, coversImportedCount, failedCoversCount, JSON.stringify(errors), sessionId]
+  );
+}
+
+const importBooks = async (req, res, next) => {
+  try {
+    const isPreview = req.query.preview === 'true';
+    const duplicateMode = req.query.duplicateMode || 'skip'; // skip, update, import_new
+
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded.' });
+    }
+
+    let rawRows;
+    try {
+      if (/\.xlsx?$/i.test(req.file.originalname)) {
+        const wb = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        rawRows = XLSX.utils.sheet_to_json(ws, { raw: false, defval: '' });
+      } else {
+        rawRows = parseCsv(req.file.buffer, { columns: true, skip_empty_lines: true, trim: true });
+      }
+    } catch (parseErr) {
+      return res.status(400).json({ message: `Failed to parse file: ${parseErr.message}` });
+    }
+
+    if (!rawRows || rawRows.length === 0) {
+      return res.status(400).json({ message: 'Uploaded file contains no rows.' });
+    }
+
+    const fileHeaders = Object.keys(rawRows[0]).map(h => h.toLowerCase().trim());
+    const missingHeaders = ['title', 'author', 'category'].filter(h => !fileHeaders.includes(h));
+    if (missingHeaders.length > 0) {
+      return res.status(400).json({ message: `Missing required CSV column(s): ${missingHeaders.join(', ')}` });
+    }
+
+    const normalisedRows = rawRows.map((r, i) => normaliseBookRow(r, i));
+    const errors = [];
+    normalisedRows.forEach(row => {
+      const rowErrors = validateBookRow(row);
+      if (rowErrors.length > 0) {
+        errors.push({
+          row: row._row,
+          title: row.title,
+          isbn: row.isbn,
+          errors: rowErrors
+        });
+      }
+    });
+
+    const existingIsbnQuery = await pool.query(
+      "SELECT isbn FROM books WHERE is_active = true AND isbn IS NOT NULL AND isbn != ''"
+    );
+    const existingIsbns = new Set(existingIsbnQuery.rows.map(r => r.isbn.trim()));
+    let duplicateIsbnCount = 0;
+    const seenInFile = new Set();
+    
+    normalisedRows.forEach(row => {
+      if (row.isbn) {
+        if (existingIsbns.has(row.isbn) || seenInFile.has(row.isbn)) {
+          duplicateIsbnCount++;
+        }
+        seenInFile.add(row.isbn);
+      }
+    });
+
+    if (isPreview) {
+      return res.json({
+        preview: normalisedRows.slice(0, 50),
+        total_rows: normalisedRows.length,
+        valid_rows: normalisedRows.length - errors.length,
+        invalid_rows: errors.length,
+        duplicate_isbn_count: duplicateIsbnCount,
+        errors: errors
+      });
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({
+        message: 'Cannot import file. Please fix all validation errors first.',
+        errors
+      });
+    }
+
+    const sessionRes = await pool.query(
+      `INSERT INTO book_import_sessions (imported_by, file_name, total_rows, success_count, status)
+       VALUES ($1, $2, $3, 0, 'processing') RETURNING id`,
+      [req.user.id, req.file.originalname, normalisedRows.length]
+    );
+    const sessionId = sessionRes.rows[0].id;
+
+    runBackgroundBookImport(sessionId, normalisedRows, duplicateMode)
+      .catch(bgErr => {
+        console.error(`Background import job failed for session ${sessionId}:`, bgErr.message);
+        pool.query(
+          `UPDATE book_import_sessions SET status = 'failed', errors = JSONB_INSERT(errors, '{0}', $1) WHERE id = $2`,
+          [JSON.stringify({ error: bgErr.message }), sessionId]
+        ).catch(() => {});
+      });
+
+    res.json({
+      success: true,
+      message: 'Import process successfully started in the background.',
+      session_id: sessionId
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getBooks,
   getBookById,
@@ -822,5 +1390,9 @@ module.exports = {
   fetchMetadataEndpoint,
   refreshMetadataEndpoint,
   auditBooks,
-  getAuditReport
+  getAuditReport,
+  downloadImportTemplate,
+  getImportHistory,
+  getImportSessionStatus,
+  importBooks
 };

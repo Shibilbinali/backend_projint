@@ -89,6 +89,7 @@ CREATE TABLE customers (
     phone VARCHAR(20),
     email VARCHAR(255),
     address TEXT,
+    notes TEXT,
     total_purchases INTEGER DEFAULT 0,
     total_spent DECIMAL(10, 2) DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

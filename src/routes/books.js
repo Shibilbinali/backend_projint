@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getBooks, getBookById, createBook, updateBook, deleteBook, fetchMetadataEndpoint, refreshMetadataEndpoint, auditBooks, getAuditReport } = require('../controllers/booksController');
+const { getBooks, getBookById, createBook, updateBook, deleteBook, fetchMetadataEndpoint, refreshMetadataEndpoint, auditBooks, getAuditReport, downloadImportTemplate, getImportHistory, getImportSessionStatus, importBooks } = require('../controllers/booksController');
 const { verifyCategoriesEndpoint, getManualReviewBooks, approveBookCategory, suggestBookCategory, rejectBookCategorySuggestion, getVerifyCategoriesReport } = require('../controllers/categoryVerificationController');
 const { authenticate, requireAdmin } = require('../middleware/auth');
 
@@ -37,6 +37,15 @@ const upload = multer({
   }
 });
 
+const bookUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ok = /\.(csv|xlsx|xls)$/i.test(file.originalname);
+    cb(ok ? null : new Error('Only CSV and XLSX files are allowed'), ok);
+  }
+});
+
 router.get('/', authenticate, getBooks);
 router.post('/verify-categories', authenticate, requireAdmin, verifyCategoriesEndpoint);
 router.get('/verify-categories-report', authenticate, getVerifyCategoriesReport);
@@ -44,6 +53,13 @@ router.get('/manual-review', authenticate, getManualReviewBooks); // Cashier can
 router.post('/fetch-metadata', authenticate, requireAdmin, fetchMetadataEndpoint);
 router.post('/audit', authenticate, requireAdmin, auditBooks);
 router.get('/audit-report', authenticate, getAuditReport); // Cashier can read
+
+// Books Bulk Import routes (must precede /:id route)
+router.get('/import-template', authenticate, requireAdmin, downloadImportTemplate);
+router.get('/import-history', authenticate, requireAdmin, getImportHistory);
+router.get('/import-history/:id', authenticate, requireAdmin, getImportSessionStatus);
+router.post('/import', authenticate, requireAdmin, bookUpload.single('file'), importBooks);
+
 router.get('/:id', authenticate, getBookById);
 router.post('/:id/refresh', authenticate, requireAdmin, refreshMetadataEndpoint);
 router.post('/:id/approve-category', authenticate, requireAdmin, approveBookCategory);
