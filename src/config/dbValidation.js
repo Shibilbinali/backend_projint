@@ -304,12 +304,20 @@ async function validateAndMigrateDb() {
     const REQUIRED_INDEXES = [
       // Books: is_active is filtered on nearly every books query
       `CREATE INDEX IF NOT EXISTS idx_books_is_active ON books (is_active)`,
+      // Books: category filter (used in WHERE and JOIN)
+      `CREATE INDEX IF NOT EXISTS idx_books_category_id ON books (category_id)`,
       // Books: ISBN search and deduplication
       `CREATE INDEX IF NOT EXISTS idx_books_isbn ON books (isbn)`,
+      // Books: title for ILIKE search (partial index on active books)
+      `CREATE INDEX IF NOT EXISTS idx_books_title ON books (title)`,
       // Books: author search
       `CREATE INDEX IF NOT EXISTS idx_books_author ON books (author)`,
       // Books: stock level queries (low_stock, out_of_stock filters)
       `CREATE INDEX IF NOT EXISTS idx_books_stock_qty ON books (stock_qty)`,
+      // Books: default ORDER BY created_at DESC
+      `CREATE INDEX IF NOT EXISTS idx_books_created_at ON books (created_at DESC)`,
+      // Books: compound index covering the most common query pattern (list active books by category, ordered by date)
+      `CREATE INDEX IF NOT EXISTS idx_books_active_cat_date ON books (is_active, category_id, created_at DESC)`,
       // Sales: customer and status filtering
       `CREATE INDEX IF NOT EXISTS idx_sales_customer_id ON sales (customer_id)`,
       `CREATE INDEX IF NOT EXISTS idx_sales_status ON sales (status)`,

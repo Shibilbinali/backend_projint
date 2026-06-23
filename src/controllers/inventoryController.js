@@ -2,7 +2,11 @@ const pool = require('../config/db');
 
 const getInventory = async (req, res, next) => {
   try {
-    const { search, low_stock } = req.query;
+    const { search, low_stock, page = 1, limit = 15 } = req.query;
+    const parsedPage = parseInt(page);
+    const parsedLimit = parseInt(limit);
+    const offset = (parsedPage - 1) * parsedLimit;
+    
     let whereClause = 'WHERE b.is_active = true';
     const values = [];
 
@@ -14,8 +18,8 @@ const getInventory = async (req, res, next) => {
       whereClause += ` AND b.stock_qty <= b.low_stock_threshold`;
     }
 
-    const result = await pool.query(
-      `SELECT b.id, b.title, b.author, b.isbn, b.stock_qty, b.low_stock_threshold,
+    const query = `
+      SELECT b.id, b.title, b.author, b.isbn, b.stock_qty, b.low_stock_threshold,
               b.price, b.cost_price, c.name as category_name, c.color as category_color,
               CASE
                 WHEN b.stock_qty = 0 THEN 'out_of_stock'
@@ -25,20 +29,38 @@ const getInventory = async (req, res, next) => {
        FROM books b
        LEFT JOIN categories c ON b.category_id = c.id
        ${whereClause}
-       ORDER BY b.stock_qty ASC`,
-      values
-    );
+       ORDER BY b.stock_qty ASC
+       LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+    `;
 
-    const summary = await pool.query(
-      `SELECT
+    const countQuery = `
+      SELECT COUNT(*) FROM books b ${whereClause}
+    `;
+
+    const summaryQuery = `
+      SELECT
         COUNT(*) as total_books,
         SUM(stock_qty) as total_stock,
         COUNT(CASE WHEN stock_qty = 0 THEN 1 END) as out_of_stock,
         COUNT(CASE WHEN stock_qty > 0 AND stock_qty <= low_stock_threshold THEN 1 END) as low_stock
-       FROM books WHERE is_active = true`
-    );
+       FROM books WHERE is_active = true
+    `;
 
-    res.json({ books: result.rows, summary: summary.rows[0] });
+    const [booksResult, countResult, summaryResult] = await Promise.all([
+      pool.query(query, [...values, parsedLimit, offset]),
+      pool.query(countQuery, values),
+      pool.query(summaryQuery)
+    ]);
+
+    const total = parseInt(countResult.rows[0].count);
+
+    res.json({ 
+      books: booksResult.rows, 
+      summary: summaryResult.rows[0],
+      total,
+      page: parsedPage,
+      totalPages: Math.ceil(total / parsedLimit)
+    });
   } catch (error) {
     next(error);
   }

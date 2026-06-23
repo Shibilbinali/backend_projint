@@ -477,35 +477,44 @@ const updateBook = async (req, res, next) => {
       return res.status(400).json({ message: 'Valid Price and Tax Rate are required to publish this book.' });
     }
 
-    // Fetch all categories to run heuristics
-    const categoriesResult = await pool.query('SELECT * FROM categories');
-    const categories = categoriesResult.rows;
+    // FIX #22: Only run category heuristics if the category_id actually changed.
+    // Previously this ran a SELECT * FROM categories on every book update, even
+    // if only the title or stock was edited — an unnecessary full table scan.
+    const categoryChanged = category_id !== undefined && String(category_id) !== String(existingBook.category_id);
 
-    const suggestion = suggestCategory({
-      title: title !== undefined ? title : existingBook.title,
-      author: author !== undefined ? author : existingBook.author,
-      isbn: isbn !== undefined ? isbn : existingBook.isbn,
-      description: finalDescription,
-      tags: finalTags || '',
-      category_id: finalCategoryId,
-      category_name: categoryName
-    }, categories);
+    let finalNeedsManualReview = existingBook.needs_manual_review;
+    let finalConfidence = existingBook.categorization_confidence;
+    let finalNotes = existingBook.categorization_notes;
 
-    const classification = {
-      needsManualReview: suggestion ? (suggestion.categoryId !== parseInt(finalCategoryId)) : false,
-      confidence: suggestion ? (suggestion.confidence / 100.0) : 1.0,
-      notes: suggestion 
-        ? `Auto-classification proposed: ${suggestion.categoryName} with confidence ${suggestion.confidence}%` 
-        : 'No auto-classification suggestion available.',
-      primaryCategoryName: suggestion ? suggestion.categoryName : categoryName,
-      secondaryCategoryNames: []
-    };
+    if (categoryChanged) {
+      // Fetch all categories to run heuristics
+      const categoriesResult = await pool.query('SELECT * FROM categories');
+      const categories = categoriesResult.rows;
 
-    let finalNeedsManualReview = classification.needsManualReview;
-    let finalConfidence = classification.confidence;
-    let finalNotes = classification.notes;
+      const suggestion = suggestCategory({
+        title: title !== undefined ? title : existingBook.title,
+        author: author !== undefined ? author : existingBook.author,
+        isbn: isbn !== undefined ? isbn : existingBook.isbn,
+        description: finalDescription,
+        tags: finalTags || '',
+        category_id: finalCategoryId,
+        category_name: categoryName
+      }, categories);
 
-    if (category_id !== undefined && category_id !== '') {
+      const classification = {
+        needsManualReview: suggestion ? (suggestion.categoryId !== parseInt(finalCategoryId)) : false,
+        confidence: suggestion ? (suggestion.confidence / 100.0) : 1.0,
+        notes: suggestion
+          ? `Auto-classification proposed: ${suggestion.categoryName} with confidence ${suggestion.confidence}%`
+          : 'No auto-classification suggestion available.',
+        primaryCategoryName: suggestion ? suggestion.categoryName : categoryName,
+        secondaryCategoryNames: []
+      };
+
+      finalNeedsManualReview = classification.needsManualReview;
+      finalConfidence = classification.confidence;
+      finalNotes = classification.notes;
+
       const proposedCatQuery = await pool.query('SELECT id FROM categories WHERE name = $1', [classification.primaryCategoryName]);
       const proposedCatId = proposedCatQuery.rows.length > 0 ? proposedCatQuery.rows[0].id : null;
       if (parseInt(category_id) !== proposedCatId) {
@@ -594,27 +603,29 @@ const updateBook = async (req, res, next) => {
     }
 
     // Sync secondary categories
-    await pool.query('DELETE FROM book_secondary_categories WHERE book_id = $1', [bookId]);
-    
-    let secondaryCatIds = [];
-    if (req.body.secondary_categories !== undefined) {
-      secondaryCatIds = req.body.secondary_categories;
-    } else {
-      if (classification.secondaryCategoryNames && classification.secondaryCategoryNames.length > 0) {
-        for (const secName of classification.secondaryCategoryNames) {
-          const secCatQuery = await pool.query('SELECT id FROM categories WHERE name = $1', [secName]);
-          if (secCatQuery.rows.length > 0) {
-            secondaryCatIds.push(secCatQuery.rows[0].id);
+    if (req.body.secondary_categories !== undefined || categoryChanged) {
+      await pool.query('DELETE FROM book_secondary_categories WHERE book_id = $1', [bookId]);
+      
+      let secondaryCatIds = [];
+      if (req.body.secondary_categories !== undefined) {
+        secondaryCatIds = req.body.secondary_categories;
+      } else if (categoryChanged && typeof classification !== 'undefined' && classification?.secondaryCategoryNames) {
+        if (classification.secondaryCategoryNames.length > 0) {
+          for (const secName of classification.secondaryCategoryNames) {
+            const secCatQuery = await pool.query('SELECT id FROM categories WHERE name = $1', [secName]);
+            if (secCatQuery.rows.length > 0) {
+              secondaryCatIds.push(secCatQuery.rows[0].id);
+            }
           }
         }
       }
-    }
 
-    for (const secId of secondaryCatIds) {
-      await pool.query(
-        'INSERT INTO book_secondary_categories (book_id, category_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
-        [bookId, secId]
-      );
+      for (const secId of secondaryCatIds) {
+        await pool.query(
+          'INSERT INTO book_secondary_categories (book_id, category_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+          [bookId, secId]
+        );
+      }
     }
 
     // Delete old cover files if they were replaced during the update
