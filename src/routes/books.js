@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const { getBooks, getBookById, createBook, updateBook, deleteBook, fetchMetadataEndpoint, refreshMetadataEndpoint, auditBooks, getAuditReport, downloadImportTemplate, getImportHistory, getImportSessionStatus, importBooks } = require('../controllers/booksController');
-const { verifyCategoriesEndpoint, getManualReviewBooks, approveBookCategory, suggestBookCategory, rejectBookCategorySuggestion, getVerifyCategoriesReport } = require('../controllers/categoryVerificationController');
+const { getBooks, getBookById, createBook, updateBook, deleteBook, fetchMetadataEndpoint, refreshMetadataEndpoint, auditBooks, getAuditReport, downloadImportTemplate, getImportHistory, getImportSessionStatus, bulkImportController, updateBookCategory } = require('../controllers/booksController');
+const { updateBookCover } = require('../controllers/coverUploadController');
 const { authenticate, requireAdmin } = require('../middleware/auth');
 
 const multer = require('multer');
@@ -47,24 +47,18 @@ const bookUpload = multer({
 });
 
 router.get('/', authenticate, getBooks);
-router.post('/verify-categories', authenticate, requireAdmin, verifyCategoriesEndpoint);
-router.get('/verify-categories-report', authenticate, getVerifyCategoriesReport);
-router.get('/manual-review', authenticate, getManualReviewBooks); // Cashier can read
 router.post('/fetch-metadata', authenticate, requireAdmin, fetchMetadataEndpoint);
 router.post('/audit', authenticate, requireAdmin, auditBooks);
 router.get('/audit-report', authenticate, getAuditReport); // Cashier can read
 
 // Books Bulk Import routes (must precede /:id route)
 router.get('/import-template', authenticate, requireAdmin, downloadImportTemplate);
-router.get('/import-history', authenticate, requireAdmin, getImportHistory);
-router.get('/import-history/:id', authenticate, requireAdmin, getImportSessionStatus);
-router.post('/bulk-import', authenticate, requireAdmin, bookUpload.single('file'), importBooks);
+router.post('/bulk-import', authenticate, requireAdmin, bookUpload.single('file'), bulkImportController);
 
 router.get('/:id', authenticate, getBookById);
 router.post('/:id/refresh', authenticate, requireAdmin, refreshMetadataEndpoint);
-router.post('/:id/approve-category', authenticate, requireAdmin, approveBookCategory);
-router.post('/:id/suggest-category', authenticate, suggestBookCategory); // Cashier suggestion
-router.post('/:id/reject-suggestion', authenticate, requireAdmin, rejectBookCategorySuggestion); // Admin rejects suggestion
+router.post('/:id/category', authenticate, requireAdmin, updateBookCategory);
+router.patch('/:id/cover', authenticate, requireAdmin, upload.single('image'), updateBookCover);
 router.post('/', authenticate, requireAdmin, createBook);
 router.put('/:id', authenticate, requireAdmin, updateBook);
 router.delete('/:id', authenticate, requireAdmin, deleteBook);

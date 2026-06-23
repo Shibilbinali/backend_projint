@@ -1,63 +1,36 @@
 {
-  "timestamp": "2026-06-23T04:09:12.259Z",
+  "timestamp": "2026-06-23T09:51:38.850Z",
   "stats": {
-    "totalBooks": 20,
+    "totalBooks": 39,
     "totalUpdated": 0,
     "updatedPricesCount": 0,
     "updatedTaxesCount": 0,
     "missingInfoCount": 0,
-    "healthScore": 65
+    "healthScore": 92
   },
   "updatedPrices": [],
   "updatedTaxes": [],
   "missingInfo": [],
   "missingDataWarnings": [],
   "duplicateWarnings": [],
-  "incorrectCategoryWarnings": [
+  "incorrectCategoryWarnings": [],
+  "missingIsbnWarnings": [],
+  "missingCoverImageWarnings": [
     {
-      "id": 33,
-      "title": "National Geographic Kids Animal Encyclopedia",
-      "author": "National Geographic Kids",
-      "confidence": "0.60"
+      "id": 21,
+      "title": "The Very Hungry Caterpillar",
+      "author": "Eric Carle"
     },
     {
-      "id": 36,
-      "title": " Introduction to Algorithms",
-      "author": " Thomas H. Cormen",
-      "confidence": "0.20"
+      "id": 28,
+      "title": "One Piece Vol. 1",
+      "author": "Eiichiro Oda"
     },
     {
-      "id": 65,
-      "title": "Atomic Habits",
-      "author": "James Clear",
-      "confidence": "0.20"
-    },
-    {
-      "id": 66,
-      "title": "The Alchemist",
-      "author": "Paulo Coelho",
-      "confidence": "0.20"
-    },
-    {
-      "id": 67,
-      "title": "Rich Dad Poor Dad",
-      "author": "Robert Kiyosaki",
-      "confidence": "0.20"
-    },
-    {
-      "id": 68,
-      "title": "Deep Work",
-      "author": "Cal Newport",
-      "confidence": "0.20"
-    },
-    {
-      "id": 69,
-      "title": "Ikigai",
-      "author": "Hector Garcia",
-      "confidence": "0.20"
+      "id": 27,
+      "title": "Naruto Vol. 1",
+      "author": "Masashi Kishimoto"
     }
   ],
-  "missingIsbnWarnings": [],
-  "missingCoverImageWarnings": [],
   "inventoryInconsistencies": []
 }

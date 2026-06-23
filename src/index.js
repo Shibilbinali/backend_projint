@@ -13,8 +13,8 @@ const customersRoutes = require('./routes/customers');
 const salesRoutes = require('./routes/sales');
 const dashboardRoutes = require('./routes/dashboard');
 const usersRoutes = require('./routes/users');
-
 const settingsRoutes = require('./routes/settings');
+const catalogAuditRoutes = require('./routes/catalogAudit');
 
 const app = express();
 
@@ -49,9 +49,27 @@ app.use(express.urlencoded({ extended: true }));
 const path = require('path');
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
+const pool = require('./config/db');
+
 // Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', message: 'Bookstore POS API is running', timestamp: new Date().toISOString() });
+app.get('/api/health', async (req, res) => {
+  try {
+    const dbRes = await pool.query('SELECT 1 as val');
+    res.json({
+      status: 'ok',
+      database: 'connected',
+      server: 'running',
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      database: 'disconnected',
+      server: 'running',
+      error: err.message,
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 // Routes
@@ -63,8 +81,8 @@ app.use('/api/customers', customersRoutes);
 app.use('/api/sales', salesRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/users', usersRoutes);
-
 app.use('/api/settings', settingsRoutes);
+app.use('/api/catalog-audit', catalogAuditRoutes);
 
 // 404 handler
 app.use((req, res) => {

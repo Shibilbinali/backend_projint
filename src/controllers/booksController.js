@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const { fetchBookMetadata } = require('../services/metadataService');
-const { classifyBook } = require('../services/categoryService');
+const { suggestCategory } = require('../services/categoryHeuristics');
+
 const path = require('path');
 const fs = require('fs');
 const XLSX = require('xlsx');
@@ -306,14 +307,6 @@ const createBook = async (req, res, next) => {
       }
     }
 
-    // Run category auto-classification
-    const classification = await classifyBook({
-      title,
-      author,
-      description: finalDescription,
-      publisher: finalPublisher,
-      isbn
-    });
 
     const catQuery = await pool.query('SELECT name FROM categories WHERE id = $1', [category_id]);
     if (catQuery.rows.length === 0) {
@@ -335,19 +328,43 @@ const createBook = async (req, res, next) => {
       return res.status(400).json({ message: 'Valid Price and Tax Rate are required to publish this book.' });
     }
 
+    // Fetch all categories to run heuristics
+    const categoriesResult = await pool.query('SELECT * FROM categories');
+    const categories = categoriesResult.rows;
+
+    const suggestion = suggestCategory({
+      title,
+      author,
+      isbn,
+      description: finalDescription,
+      tags: tags || '',
+      category_id,
+      category_name: categoryName
+    }, categories);
+
+    const classification = {
+      needsManualReview: suggestion ? (suggestion.categoryId !== parseInt(category_id)) : false,
+      confidence: suggestion ? (suggestion.confidence / 100.0) : 1.0,
+      notes: suggestion 
+        ? `Auto-classification proposed: ${suggestion.categoryName} with confidence ${suggestion.confidence}%` 
+        : 'No auto-classification suggestion available.',
+      primaryCategoryName: suggestion ? suggestion.categoryName : categoryName,
+      secondaryCategoryNames: []
+    };
+
     const result = await pool.query(
       `INSERT INTO books (title, author, isbn, category_id, price, cost_price, stock_qty,
         low_stock_threshold, cover_image_url, publisher, published_year, description,
         front_cover_url, back_cover_url, cover_source, edition, tax_rate,
         needs_manual_review, categorization_confidence, categorization_notes,
-        reading_age, price_type, tags, page_count, format)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25) RETURNING *`,
+        reading_age, price_type, tags, page_count, format, cover_image)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26) RETURNING *`,
       [title, author, isbn, category_id, resolvedPrice, cost_price || 0,
        stock_qty || 0, low_stock_threshold || 5, finalFrontCover,
        finalPublisher, finalPublishedYear, finalDescription,
        finalFrontCover || null, back_cover_url || null, finalCoverSource, finalEdition,
        resolvedTax, classification.needsManualReview, classification.confidence, classification.notes,
-       reading_age || 'All Ages', finalPriceType, tags || '', finalPageCount, finalFormat]
+       reading_age || 'All Ages', finalPriceType, tags || '', finalPageCount, finalFormat, finalFrontCover || null]
     );
 
     const newBook = result.rows[0];
@@ -433,14 +450,6 @@ const updateBook = async (req, res, next) => {
       }
     }
 
-    // Run category auto-classification
-    const classification = await classifyBook({
-      title: title !== undefined ? title : existingBook.title,
-      author: author !== undefined ? author : existingBook.author,
-      description: finalDescription,
-      publisher: finalPublisher,
-      isbn: isbn !== undefined ? isbn : existingBook.isbn
-    });
 
     let finalCategoryId = category_id !== undefined ? category_id : existingBook.category_id;
     if (!finalCategoryId) {
@@ -467,6 +476,30 @@ const updateBook = async (req, res, next) => {
     if (resolvedPrice === null || isNaN(resolvedPrice) || resolvedTax === null || isNaN(resolvedTax)) {
       return res.status(400).json({ message: 'Valid Price and Tax Rate are required to publish this book.' });
     }
+
+    // Fetch all categories to run heuristics
+    const categoriesResult = await pool.query('SELECT * FROM categories');
+    const categories = categoriesResult.rows;
+
+    const suggestion = suggestCategory({
+      title: title !== undefined ? title : existingBook.title,
+      author: author !== undefined ? author : existingBook.author,
+      isbn: isbn !== undefined ? isbn : existingBook.isbn,
+      description: finalDescription,
+      tags: finalTags || '',
+      category_id: finalCategoryId,
+      category_name: categoryName
+    }, categories);
+
+    const classification = {
+      needsManualReview: suggestion ? (suggestion.categoryId !== parseInt(finalCategoryId)) : false,
+      confidence: suggestion ? (suggestion.confidence / 100.0) : 1.0,
+      notes: suggestion 
+        ? `Auto-classification proposed: ${suggestion.categoryName} with confidence ${suggestion.confidence}%` 
+        : 'No auto-classification suggestion available.',
+      primaryCategoryName: suggestion ? suggestion.categoryName : categoryName,
+      secondaryCategoryNames: []
+    };
 
     let finalNeedsManualReview = classification.needsManualReview;
     let finalConfidence = classification.confidence;
@@ -522,8 +555,9 @@ const updateBook = async (req, res, next) => {
         tags = $23,
         page_count = $24,
         format = $25,
+        cover_image = $26,
         updated_at = NOW()
-       WHERE id = $26 AND is_active = true RETURNING *`,
+       WHERE id = $27 AND is_active = true RETURNING *`,
       [
         title !== undefined ? title : existingBook.title,
         author !== undefined ? author : existingBook.author,
@@ -550,6 +584,7 @@ const updateBook = async (req, res, next) => {
         finalTags,
         finalPageCount,
         finalFormat,
+        finalFrontCover || null,
         bookId
       ]
     );
@@ -580,6 +615,37 @@ const updateBook = async (req, res, next) => {
         'INSERT INTO book_secondary_categories (book_id, category_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
         [bookId, secId]
       );
+    }
+
+    // Delete old cover files if they were replaced during the update
+    const oldFront = existingBook.front_cover_url || existingBook.cover_image_url;
+    if (finalFrontCover && oldFront && finalFrontCover !== oldFront) {
+      if (oldFront.startsWith('/uploads/') && !oldFront.includes('placeholder')) {
+        const oldFilePath = path.join(__dirname, '../../', oldFront);
+        try {
+          if (fs.existsSync(oldFilePath)) {
+            fs.unlinkSync(oldFilePath);
+            console.log(`[Update Book] Deleted replaced front cover file: ${oldFront}`);
+          }
+        } catch (err) {
+          console.error(`[Update Book] Failed to delete replaced front cover file:`, err.message);
+        }
+      }
+    }
+
+    const oldBack = existingBook.back_cover_url;
+    if (finalBackCover && oldBack && finalBackCover !== oldBack) {
+      if (oldBack.startsWith('/uploads/') && !oldBack.includes('placeholder')) {
+        const oldFilePath = path.join(__dirname, '../../', oldBack);
+        try {
+          if (fs.existsSync(oldFilePath)) {
+            fs.unlinkSync(oldFilePath);
+            console.log(`[Update Book] Deleted replaced back cover file: ${oldBack}`);
+          }
+        } catch (err) {
+          console.error(`[Update Book] Failed to delete replaced back cover file:`, err.message);
+        }
+      }
     }
 
     res.json(result.rows[0]);
@@ -661,6 +727,9 @@ const refreshMetadataEndpoint = async (req, res, next) => {
 
 const auditBooks = async (req, res, next) => {
   try {
+    const categoriesRes = await pool.query('SELECT id, name FROM categories');
+    const categories = categoriesRes.rows;
+
     const booksRes = await pool.query(
       `SELECT b.*, c.name as category_name
        FROM books b
@@ -742,13 +811,22 @@ const auditBooks = async (req, res, next) => {
       }
 
       // 2. Check incorrect/unverified categories
-      if (book.needs_manual_review) {
+      const suggestion = suggestCategory(book, categories);
+      if (suggestion && suggestion.categoryId !== book.category_id) {
         hasWarning = true;
         incorrectCategoryWarnings.push({
           id: book.id,
           title: book.title,
           author: book.author,
-          confidence: book.categorization_confidence
+          isbn: book.isbn,
+          description: book.description,
+          tags: book.tags,
+          currentCategory: book.category_name,
+          currentCategoryId: book.category_id,
+          suggestedCategory: suggestion.categoryName,
+          suggestedCategoryId: suggestion.categoryId,
+          confidence: suggestion.confidence,
+          status: suggestion.confidence >= 80 ? 'Auto-Correct Ready' : 'Needs Verification'
         });
       }
 
@@ -899,6 +977,164 @@ const getAuditReport = async (req, res, next) => {
 // BULK BOOK IMPORT MODULE
 // ============================================================
 
+const bulkImportController = async (req, res, next) => {
+  try {
+    const isPreview = req.query.preview === 'true';
+
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded.' });
+    }
+
+    let rawRows;
+    try {
+      if (/\.xlsx?$/i.test(req.file.originalname)) {
+        const wb = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        rawRows = XLSX.utils.sheet_to_json(ws, { raw: false, defval: '' });
+      } else {
+        rawRows = parseCsv(req.file.buffer, { columns: true, skip_empty_lines: true, trim: true });
+      }
+    } catch (parseErr) {
+      return res.status(400).json({ message: `Failed to parse file: ${parseErr.message}` });
+    }
+
+    if (!rawRows || rawRows.length === 0) {
+      return res.status(400).json({ message: 'Uploaded file contains no rows.' });
+    }
+
+    const errors = [];
+    const parsedBooks = [];
+
+    // Validation
+    rawRows.forEach((row, index) => {
+      const rowNum = index + 2; // Assuming header is row 1
+      const rowErrors = [];
+      
+      const title = row.title ? String(row.title).trim() : '';
+      const author = row.author ? String(row.author).trim() : '';
+      const isbn = row.isbn ? String(row.isbn).trim() : '';
+      const category = row.category ? String(row.category).trim() : '';
+      const publisher = row.publisher ? String(row.publisher).trim() : '';
+      const purchase_price = parseFloat(row.purchase_price || 0);
+      const selling_price = parseFloat(row.selling_price || 0);
+      const stock = parseInt(row.stock || 0, 10);
+
+      if (!title) rowErrors.push('Missing required column: title');
+      if (!author) rowErrors.push('Missing required column: author');
+      if (!isbn) rowErrors.push('Missing required column: isbn');
+      if (!category) rowErrors.push('Missing required column: category');
+      if (!publisher) rowErrors.push('Missing required column: publisher');
+      if (isNaN(purchase_price) || purchase_price < 0) rowErrors.push('Invalid purchase_price');
+      if (isNaN(selling_price) || selling_price < 0) rowErrors.push('Invalid selling_price');
+      if (isNaN(stock) || stock < 0) rowErrors.push('Invalid stock');
+
+      const parsedBook = { title, author, isbn, category, publisher, purchase_price, selling_price, stock };
+      parsedBooks.push({
+        row: rowNum,
+        ...parsedBook,
+        errors: rowErrors
+      });
+
+      if (rowErrors.length > 0) {
+        errors.push({
+          row: rowNum,
+          title: title,
+          isbn: isbn,
+          errors: rowErrors
+        });
+      }
+    });
+
+    if (isPreview) {
+      return res.json({
+        preview: parsedBooks,
+        total_rows: parsedBooks.length,
+        valid_rows: parsedBooks.length - errors.length,
+        invalid_rows: errors.length,
+        errors: errors
+      });
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({
+        message: 'Cannot import file. Please fix all validation errors first.',
+        errors
+      });
+    }
+
+    // Actual Import Logic
+    let importedCount = 0;
+    let failedCount = 0;
+    let duplicateCount = 0;
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Fetch existing ISBNs
+      const existingIsbnQuery = await client.query("SELECT isbn FROM books WHERE is_active = true AND isbn IS NOT NULL AND isbn != ''");
+      const existingIsbns = new Set(existingIsbnQuery.rows.map(r => r.isbn.trim()));
+
+      for (const book of parsedBooks) {
+        if (existingIsbns.has(book.isbn)) {
+          duplicateCount++;
+          continue;
+        }
+
+        try {
+          // Check if category exists
+          let catId = null;
+          const catQuery = await client.query('SELECT id FROM categories WHERE LOWER(name) = LOWER($1)', [book.category]);
+          if (catQuery.rows.length > 0) {
+            catId = catQuery.rows[0].id;
+          } else {
+            const randomColor = "#" + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
+            const newCat = await client.query(
+              'INSERT INTO categories (name, description, color) VALUES ($1, $2, $3) RETURNING id',
+              [book.category, 'Auto-created during bulk import', randomColor]
+            );
+            catId = newCat.rows[0].id;
+          }
+
+          // Insert book
+          await client.query(
+            `INSERT INTO books (
+              title, author, isbn, category_id, cost_price, price, stock_qty, publisher
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [book.title, book.author, book.isbn, catId, book.purchase_price, book.selling_price, book.stock, book.publisher]
+          );
+
+          existingIsbns.add(book.isbn); // Add to set to prevent duplicates within the file itself
+          importedCount++;
+        } catch (dbErr) {
+          console.error('Import Row Error:', dbErr.message);
+          failedCount++;
+        }
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    return res.json({
+      success: true,
+      summary: {
+        total_rows: parsedBooks.length,
+        imported_rows: importedCount,
+        failed_rows: failedCount,
+        duplicate_rows: duplicateCount
+      }
+    });
+
+  } catch (err) {
+    next(err);
+  }
+};
+
 const REQUIRED_BOOK_COLUMNS = [
   'title', 'author', 'isbn', 'category', 'selling_price', 'cost_price',
   'stock_quantity', 'low_stock_alert', 'publisher', 'published_year',
@@ -939,7 +1175,6 @@ function validateBookRow(row) {
   const errs = [];
   if (!row.title) errs.push('Title is required');
   if (!row.author) errs.push('Author is required');
-  if (!row.category) errs.push('Category is required');
   if (isNaN(row.selling_price) || row.selling_price < 0) errs.push('Selling price must be a non-negative number');
   if (isNaN(row.cost_price) || row.cost_price < 0) errs.push('Cost price must be a non-negative number');
   if (isNaN(row.stock_quantity) || row.stock_quantity < 0) errs.push('Stock quantity must be a non-negative integer');
@@ -1016,368 +1251,52 @@ const getImportSessionStatus = async (req, res, next) => {
   }
 };
 
-async function runBackgroundBookImport(sessionId, rows, duplicateMode) {
-  const BATCH_SIZE = 500;
-  let successCount = 0;
-  let updatedCount = 0;
-  let skippedCount = 0;
-  let failedCount = 0;
-  let coversImportedCount = 0;
-  let failedCoversCount = 0;
-  const errors = [];
-
-  const categoryCache = new Map();
-
-  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    const chunk = rows.slice(i, i + BATCH_SIZE);
-    const txClient = await pool.connect();
-    
-    try {
-      await txClient.query('BEGIN');
-      
-      for (const row of chunk) {
-        try {
-          const catNameClean = row.category.trim();
-          let catId = categoryCache.get(catNameClean.toLowerCase());
-          
-          if (!catId) {
-            const catRes = await txClient.query(
-              'SELECT id FROM categories WHERE LOWER(name) = LOWER($1)',
-              [catNameClean]
-            );
-            if (catRes.rows.length > 0) {
-              catId = catRes.rows[0].id;
-            } else {
-              const insertCatRes = await txClient.query(
-                `INSERT INTO categories (name, created_at)
-                 VALUES ($1, NOW()) RETURNING id`,
-                [catNameClean]
-              );
-              catId = insertCatRes.rows[0].id;
-            }
-            categoryCache.set(catNameClean.toLowerCase(), catId);
-          }
-
-          let existingBookId = null;
-          if (row.isbn) {
-            const existingRes = await txClient.query(
-              'SELECT id FROM books WHERE isbn = $1 AND is_active = true LIMIT 1',
-              [row.isbn]
-            );
-            if (existingRes.rows.length > 0) {
-              existingBookId = existingRes.rows[0].id;
-            }
-          }
-
-          // Handle cover image downloading
-          let localCoverPath = null;
-          const coverUrl = row.cover_image_url || row.front_cover_url;
-          if (coverUrl && coverUrl.trim().startsWith('http')) {
-            try {
-              localCoverPath = await downloadCoverImage(coverUrl.trim(), row.isbn);
-              coversImportedCount++;
-            } catch (dlErr) {
-              console.error(`Failed to download cover for ISBN ${row.isbn} from ${coverUrl}: ${dlErr.message}`);
-              failedCoversCount++;
-              localCoverPath = '/uploads/cover-not-available.svg';
-            }
-          }
-
-          if (existingBookId) {
-            if (duplicateMode === 'skip') {
-              skippedCount++;
-              continue;
-            } else if (duplicateMode === 'update') {
-              await txClient.query(
-                `UPDATE books SET
-                  title = $1, author = $2, category_id = $3, price = $4, cost_price = $5,
-                  stock_qty = $6, low_stock_threshold = $7, publisher = $8, published_year = $9,
-                  edition = $10, tax_rate = $11, cover_image_url = $12, front_cover_url = $12,
-                  back_cover_url = $13, cover_source = $14, reading_age = $15, price_type = $16,
-                  tags = $17, page_count = $18, format = $19, description = $20,
-                  cover_image = COALESCE($21, cover_image), updated_at = NOW()
-                 WHERE id = $22`,
-                [
-                  row.title, row.author, catId, row.selling_price, row.cost_price,
-                  row.stock_quantity, row.low_stock_alert, row.publisher, row.published_year,
-                  row.edition, row.gst_percentage, row.cover_image_url || row.front_cover_url || null, row.back_cover_url || null,
-                  row.cover_source, row.reading_age, row.price_type, row.category_tags,
-                  row.page_count, row.format, row.description, localCoverPath || null, existingBookId
-                ]
-              );
-              updatedCount++;
-              continue;
-            }
-          }
-
-          await txClient.query(
-            `INSERT INTO books (
-              title, author, isbn, category_id, price, cost_price, stock_qty,
-              low_stock_threshold, publisher, published_year, edition, tax_rate,
-              cover_image_url, front_cover_url, back_cover_url, cover_source,
-              reading_age, price_type, tags, page_count, format, description, cover_image
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
-            [
-              row.title, row.author, row.isbn || null, catId, row.selling_price, row.cost_price,
-              row.stock_quantity, row.low_stock_alert, row.publisher, row.published_year,
-              row.edition, row.gst_percentage, row.cover_image_url || row.front_cover_url || null, row.front_cover_url || null, row.back_cover_url || null,
-              row.cover_source, row.reading_age, row.price_type, row.category_tags,
-              row.page_count, row.format, row.description, localCoverPath || '/uploads/cover-not-available.svg'
-            ]
-          );
-          successCount++;
-        } catch (rowErr) {
-          failedCount++;
-          errors.push({
-            row: row._row,
-            title: row.title,
-            isbn: row.isbn,
-            error: rowErr.message
-          });
-        }
-      }
-
-      await txClient.query('COMMIT');
-    } catch (batchErr) {
-      await txClient.query('ROLLBACK');
-      console.error(`Batch starting at index ${i} failed. Retrying rows one-by-one to salvage successful insertions...`);
-      
-      for (const row of chunk) {
-        const singleClient = await pool.connect();
-        try {
-          await singleClient.query('BEGIN');
-          
-          const catNameClean = row.category.trim();
-          let catId = categoryCache.get(catNameClean.toLowerCase());
-          
-          if (!catId) {
-            const catRes = await singleClient.query(
-              'SELECT id FROM categories WHERE LOWER(name) = LOWER($1)',
-              [catNameClean]
-            );
-            if (catRes.rows.length > 0) {
-              catId = catRes.rows[0].id;
-            } else {
-              const insertCatRes = await singleClient.query(
-                `INSERT INTO categories (name, created_at)
-                 VALUES ($1, NOW()) RETURNING id`,
-                [catNameClean]
-              );
-              catId = insertCatRes.rows[0].id;
-            }
-            categoryCache.set(catNameClean.toLowerCase(), catId);
-          }
-
-          let existingBookId = null;
-          if (row.isbn) {
-            const existingRes = await singleClient.query(
-              'SELECT id FROM books WHERE isbn = $1 AND is_active = true LIMIT 1',
-              [row.isbn]
-            );
-            if (existingRes.rows.length > 0) {
-              existingBookId = existingRes.rows[0].id;
-            }
-          }
-
-          // Handle cover image downloading
-          let localCoverPath = null;
-          const coverUrl = row.cover_image_url || row.front_cover_url;
-          if (coverUrl && coverUrl.trim().startsWith('http')) {
-            try {
-              localCoverPath = await downloadCoverImage(coverUrl.trim(), row.isbn);
-              coversImportedCount++;
-            } catch (dlErr) {
-              console.error(`Failed to download cover for ISBN ${row.isbn} from ${coverUrl}: ${dlErr.message}`);
-              failedCoversCount++;
-              localCoverPath = '/uploads/cover-not-available.svg';
-            }
-          }
-
-          if (existingBookId) {
-            if (duplicateMode === 'skip') {
-              skippedCount++;
-              await singleClient.query('COMMIT');
-              continue;
-            } else if (duplicateMode === 'update') {
-              await singleClient.query(
-                `UPDATE books SET
-                  title = $1, author = $2, category_id = $3, price = $4, cost_price = $5,
-                  stock_qty = $6, low_stock_threshold = $7, publisher = $8, published_year = $9,
-                  edition = $10, tax_rate = $11, cover_image_url = $12, front_cover_url = $12,
-                  back_cover_url = $13, cover_source = $14, reading_age = $15, price_type = $16,
-                  tags = $17, page_count = $18, format = $19, description = $20,
-                  cover_image = COALESCE($21, cover_image), updated_at = NOW()
-                 WHERE id = $22`,
-                [
-                  row.title, row.author, catId, row.selling_price, row.cost_price,
-                  row.stock_quantity, row.low_stock_alert, row.publisher, row.published_year,
-                  row.edition, row.gst_percentage, row.cover_image_url || row.front_cover_url || null, row.back_cover_url || null,
-                  row.cover_source, row.reading_age, row.price_type, row.category_tags,
-                  row.page_count, row.format, row.description, localCoverPath || null, existingBookId
-                ]
-              );
-              updatedCount++;
-              await singleClient.query('COMMIT');
-              continue;
-            }
-          }
-
-          await singleClient.query(
-            `INSERT INTO books (
-              title, author, isbn, category_id, price, cost_price, stock_qty,
-              low_stock_threshold, publisher, published_year, edition, tax_rate,
-              cover_image_url, front_cover_url, back_cover_url, cover_source,
-              reading_age, price_type, tags, page_count, format, description, cover_image
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
-            [
-              row.title, row.author, row.isbn || null, catId, row.selling_price, row.cost_price,
-              row.stock_quantity, row.low_stock_alert, row.publisher, row.published_year,
-              row.edition, row.gst_percentage, row.cover_image_url || row.front_cover_url || null, row.front_cover_url || null, row.back_cover_url || null,
-              row.cover_source, row.reading_age, row.price_type, row.category_tags,
-              row.page_count, row.format, row.description, localCoverPath || '/uploads/cover-not-available.svg'
-            ]
-          );
-          successCount++;
-          await singleClient.query('COMMIT');
-        } catch (singleRowErr) {
-          await singleClient.query('ROLLBACK');
-          failedCount++;
-          errors.push({
-            row: row._row,
-            title: row.title,
-            isbn: row.isbn,
-            error: singleRowErr.message
-          });
-        } finally {
-          singleClient.release();
-        }
-      }
-    } finally {
-      txClient.release();
-    }
-
-    await pool.query(
-      `UPDATE book_import_sessions SET
-        success_count = $1, updated_count = $2, skipped_count = $3, failed_count = $4,
-        covers_imported_count = $5, failed_covers_count = $6, errors = $7
-       WHERE id = $8`,
-      [successCount, updatedCount, skippedCount, failedCount, coversImportedCount, failedCoversCount, JSON.stringify(errors), sessionId]
-    );
-  }
-
-  await pool.query(
-    `UPDATE book_import_sessions SET
-      status = 'completed', completed_at = NOW(),
-      success_count = $1, updated_count = $2, skipped_count = $3, failed_count = $4,
-      covers_imported_count = $5, failed_covers_count = $6, errors = $7
-     WHERE id = $8`,
-    [successCount, updatedCount, skippedCount, failedCount, coversImportedCount, failedCoversCount, JSON.stringify(errors), sessionId]
-  );
-}
-
-const importBooks = async (req, res, next) => {
+const updateBookCategory = async (req, res, next) => {
   try {
-    const isPreview = req.query.preview === 'true';
-    const duplicateMode = req.query.duplicateMode || 'skip'; // skip, update, import_new
-
-    if (!req.file) {
-      return res.status(400).json({ message: 'No file uploaded.' });
-    }
-
-    let rawRows;
-    try {
-      if (/\.xlsx?$/i.test(req.file.originalname)) {
-        const wb = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        rawRows = XLSX.utils.sheet_to_json(ws, { raw: false, defval: '' });
-      } else {
-        rawRows = parseCsv(req.file.buffer, { columns: true, skip_empty_lines: true, trim: true });
-      }
-    } catch (parseErr) {
-      return res.status(400).json({ message: `Failed to parse file: ${parseErr.message}` });
-    }
-
-    if (!rawRows || rawRows.length === 0) {
-      return res.status(400).json({ message: 'Uploaded file contains no rows.' });
-    }
-
-    const fileHeaders = Object.keys(rawRows[0]).map(h => h.toLowerCase().trim());
-    const missingHeaders = ['title', 'author', 'category'].filter(h => !fileHeaders.includes(h));
-    if (missingHeaders.length > 0) {
-      return res.status(400).json({ message: `Missing required CSV column(s): ${missingHeaders.join(', ')}` });
-    }
-
-    const normalisedRows = rawRows.map((r, i) => normaliseBookRow(r, i));
-    const errors = [];
-    normalisedRows.forEach(row => {
-      const rowErrors = validateBookRow(row);
-      if (rowErrors.length > 0) {
-        errors.push({
-          row: row._row,
-          title: row.title,
-          isbn: row.isbn,
-          errors: rowErrors
-        });
-      }
-    });
-
-    const existingIsbnQuery = await pool.query(
-      "SELECT isbn FROM books WHERE is_active = true AND isbn IS NOT NULL AND isbn != ''"
-    );
-    const existingIsbns = new Set(existingIsbnQuery.rows.map(r => r.isbn.trim()));
-    let duplicateIsbnCount = 0;
-    const seenInFile = new Set();
+    const { category_id } = req.body;
+    if (!category_id) return res.status(400).json({ message: 'category_id is required' });
     
-    normalisedRows.forEach(row => {
-      if (row.isbn) {
-        if (existingIsbns.has(row.isbn) || seenInFile.has(row.isbn)) {
-          duplicateIsbnCount++;
-        }
-        seenInFile.add(row.isbn);
-      }
-    });
+    const catRes = await pool.query('SELECT id, name FROM categories WHERE id = $1', [category_id]);
+    if (catRes.rows.length === 0) return res.status(400).json({ message: 'Invalid category_id' });
 
-    if (isPreview) {
-      return res.json({
-        preview: normalisedRows.slice(0, 50),
-        total_rows: normalisedRows.length,
-        valid_rows: normalisedRows.length - errors.length,
-        invalid_rows: errors.length,
-        duplicate_isbn_count: duplicateIsbnCount,
-        errors: errors
-      });
-    }
-
-    if (errors.length > 0) {
-      return res.status(400).json({
-        message: 'Cannot import file. Please fix all validation errors first.',
-        errors
-      });
-    }
-
-    const sessionRes = await pool.query(
-      `INSERT INTO book_import_sessions (imported_by, file_name, total_rows, success_count, status)
-       VALUES ($1, $2, $3, 0, 'processing') RETURNING id`,
-      [req.user.id, req.file.originalname, normalisedRows.length]
+    const updateRes = await pool.query(
+      'UPDATE books SET category_id = $1, needs_manual_review = false, updated_at = NOW() WHERE id = $2 RETURNING *',
+      [category_id, req.params.id]
     );
-    const sessionId = sessionRes.rows[0].id;
 
-    runBackgroundBookImport(sessionId, normalisedRows, duplicateMode)
-      .catch(bgErr => {
-        console.error(`Background import job failed for session ${sessionId}:`, bgErr.message);
-        pool.query(
-          `UPDATE book_import_sessions SET status = 'failed', errors = JSONB_INSERT(errors, '{0}', $1) WHERE id = $2`,
-          [JSON.stringify({ error: bgErr.message }), sessionId]
-        ).catch(() => {});
-      });
+    if (updateRes.rows.length === 0) return res.status(404).json({ message: 'Book not found' });
+    
+    // Sync with saved audit report file
+    try {
+      if (fs.existsSync(AUDIT_REPORT_PATH)) {
+        const reportData = await fs.promises.readFile(AUDIT_REPORT_PATH, 'utf8');
+        const report = JSON.parse(reportData);
+        if (report.incorrectCategoryWarnings) {
+          const originalLength = report.incorrectCategoryWarnings.length;
+          report.incorrectCategoryWarnings = report.incorrectCategoryWarnings.filter(w => w.id !== parseInt(req.params.id));
+          const newLength = report.incorrectCategoryWarnings.length;
+          if (originalLength !== newLength) {
+            report.stats.totalUpdated = (report.stats.totalUpdated || 0) + 1;
+            const totalBooks = report.stats.totalBooks || 1;
+            report.stats.healthScore = Math.min(100, Math.round((report.stats.healthScore || 0) + (1 / totalBooks * 100)));
+            
+            // Sync root level values for compatibility
+            report.totalFixed = report.stats.totalUpdated;
+            report.healthScore = report.stats.healthScore;
+            report.warnings = report.incorrectCategoryWarnings;
+            
+            await fs.promises.writeFile(AUDIT_REPORT_PATH, JSON.stringify(report, null, 2), 'utf8');
+            console.log(`[Audit Sync] Synced book ID ${req.params.id} category update with audit report file`);
+          }
+        }
+      }
+    } catch (auditErr) {
+      console.warn('[Audit Sync] Failed to sync category update with report file:', auditErr.message);
+    }
 
-    res.json({
-      success: true,
-      message: 'Import process successfully started in the background.',
-      session_id: sessionId
-    });
-  } catch (err) {
-    next(err);
+    res.json(updateRes.rows[0]);
+  } catch (error) {
+    next(error);
   }
 };
 
@@ -1394,5 +1313,7 @@ module.exports = {
   downloadImportTemplate,
   getImportHistory,
   getImportSessionStatus,
-  importBooks
+  suggestCategory,
+  bulkImportController,
+  updateBookCategory
 };

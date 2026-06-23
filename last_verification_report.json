@@ -1,104 +1,15 @@
 {
-  "timestamp": "2026-06-23T04:07:51.528Z",
-  "totalChecked": 20,
+  "timestamp": "2026-06-23T06:59:44.156Z",
+  "totalChecked": 39,
   "moved": [],
-  "needsReview": [
-    {
-      "id": 23,
-      "title": "Winnie the Pooh",
-      "author": "A. A. Milne",
-      "isbn": "9780140361216",
-      "previousCategory": "Classics",
-      "newCategory": "Classics",
-      "secondaryCategories": [],
-      "confidence": 0.2,
-      "notes": "Low confidence: No indicators found. Defaulted to Classics."
-    },
-    {
-      "id": 33,
-      "title": "National Geographic Kids Animal Encyclopedia",
-      "author": "National Geographic Kids",
-      "isbn": "9781426310225",
-      "previousCategory": "Geography & Travel",
-      "newCategory": "Geography & Travel",
-      "secondaryCategories": [
-        "Animals & Nature"
-      ],
-      "confidence": 0.6,
-      "notes": "Potential conflict: narrow margin (0.0) between top choices."
-    },
-    {
-      "id": 36,
-      "title": " Introduction to Algorithms",
-      "author": " Thomas H. Cormen",
-      "isbn": "9780262046305",
-      "previousCategory": "Classics",
-      "newCategory": "Classics",
-      "secondaryCategories": [],
-      "confidence": 0.2,
-      "notes": "Low confidence: No indicators found. Defaulted to Classics."
-    },
-    {
-      "id": 65,
-      "title": "Atomic Habits",
-      "author": "James Clear",
-      "isbn": "9780735211292",
-      "previousCategory": "Classics",
-      "newCategory": "Classics",
-      "secondaryCategories": [],
-      "confidence": 0.2,
-      "notes": "Low confidence: No indicators found. Defaulted to Classics."
-    },
-    {
-      "id": 66,
-      "title": "The Alchemist",
-      "author": "Paulo Coelho",
-      "isbn": "9780062315007",
-      "previousCategory": "Classics",
-      "newCategory": "Classics",
-      "secondaryCategories": [],
-      "confidence": 0.2,
-      "notes": "Low confidence: No indicators found. Defaulted to Classics."
-    },
-    {
-      "id": 67,
-      "title": "Rich Dad Poor Dad",
-      "author": "Robert Kiyosaki",
-      "isbn": "9781612680194",
-      "previousCategory": "Classics",
-      "newCategory": "Classics",
-      "secondaryCategories": [],
-      "confidence": 0.2,
-      "notes": "Low confidence: No indicators found. Defaulted to Classics."
-    },
-    {
-      "id": 68,
-      "title": "Deep Work",
-      "author": "Cal Newport",
-      "isbn": "9781455586691",
-      "previousCategory": "Classics",
-      "newCategory": "Classics",
-      "secondaryCategories": [],
-      "confidence": 0.2,
-      "notes": "Low confidence: No indicators found. Defaulted to Classics."
-    },
-    {
-      "id": 69,
-      "title": "Ikigai",
-      "author": "Hector Garcia",
-      "isbn": "9780143130727",
-      "previousCategory": "Classics",
-      "newCategory": "Classics",
-      "secondaryCategories": [],
-      "confidence": 0.2,
-      "notes": "Low confidence: No indicators found. Defaulted to Classics."
-    }
-  ],
+  "needsReview": [],
   "conflicts": [],
   "stats": {
-    "totalChecked": 20,
+    "totalChecked": 39,
     "movedCount": 0,
-    "reviewCount": 8,
-    "conflictCount": 0
+    "reviewCount": 0,
+    "conflictCount": 0,
+    "correctCount": 39,
+    "failedCount": 0
   }
 }
